@@ -5,7 +5,6 @@
 # conditions, performs ANOVA, generates plots, and includes a RL demo.
 # =============================================================================
 
-#!pip install -q simpy numpy pandas matplotlib seaborn statsmodels ray[rllib] gymnasium
 
 import numpy as np
 import pandas as pd
