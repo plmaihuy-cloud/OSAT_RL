@@ -414,4 +414,11 @@ for i, ax in enumerate(axes.flat):
     ax.bar(overall.index, values)
     ax.set_title(titles[i])
     ax.set_ylabel(titles[i])
-    for
+    for j, v in enumerate(values):
+        ax.text(j, v + 0.05 * max(values), f"{v:.2f}", ha='center')
+
+plt.tight_layout()
+plt.savefig('heuristic_charts.png')
+plt.close()
+
+print("Simulation completed successfully.")
