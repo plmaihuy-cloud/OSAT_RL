@@ -1,11 +1,3 @@
-# =============================================================================
-# OSAT Thesis – Full Simulation (Heuristics + RL Demo)
-# =============================================================================
-# This notebook runs the simulation for FIFO, SPT, EDD over the full 189
-# conditions, performs ANOVA, generates plots, and includes a RL demo.
-# =============================================================================
-
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,11 +14,11 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
-print("Packages installed.")
+print("Packages imported successfully.")
 
-# ------------------------------------------------------------------------------
-# 1. Create input CSV files (if not already present)
-# ------------------------------------------------------------------------------
+# =============================================================================
+# 1. Create input CSV files
+# =============================================================================
 data_folder = 'input_data'
 if not os.path.exists(data_folder):
     os.makedirs(data_folder)
@@ -37,26 +29,32 @@ def write_default_csvs():
         f.write("0,DieAttach,3,3.5,0.2,480,4\n1,WireBond,4,4.2,0.25,360,5\n")
         f.write("2,Encapsulation,3,6.8,0.22,600,6\n3,FinalTest,5,2.1,0.3,500,3\n")
         f.write("4,Quality,2,0.8,0.15,1000,2\n")
+
     with open(os.path.join(data_folder, 'product_mix.csv'), 'w') as f:
         f.write("product_type,probability\nA,0.5\nB,0.3\nC,0.2\n")
+
     with open(os.path.join(data_folder, 'global_params.csv'), 'w') as f:
         f.write("param,value\nplanned_lead_time_hours,168\nsimulation_duration_hours,168\n")
+
     with open(os.path.join(data_folder, 'variability_parameters.csv'), 'w') as f:
         f.write("variability,cv_multiplier,mtbf_multiplier,arrival_rate_multiplier\n")
         f.write("Low,0.5,1.5,1.0\nMedium,1.0,1.0,1.0\nHigh,1.5,0.67,1.0\n")
+
     with open(os.path.join(data_folder, 'failure_parameters.csv'), 'w') as f:
         f.write("failure,mtbf_multiplier\nLow,1.5\nMedium,1.0\nHigh,0.67\n")
+
     with open(os.path.join(data_folder, 'demand_patterns.csv'), 'w') as f:
         f.write("demand,type,description,parameters\n")
         f.write("Steady,constant,Constant arrival rate,1.0\n")
         f.write("Seasonal,sinusoidal,Weekly cycle (amplitude 0.3),0.3,168\n")
         f.write("Surge,step,2-day surge (factor 1.5),1.5,72,120\n")
-    # Full condition list (7 policies × 27 combos = 189)
-    policies = ['FIFO', 'SPT', 'EDD', 'H-MARL-CTDE', 'H-MARL-Independent',
-                'H-MARL-ValueDecomp', 'Flat MARL']
+
+    # Full 189 conditions
+    policies = ['FIFO', 'SPT', 'EDD']
     variability = ['Low', 'Medium', 'High']
     demand = ['Steady', 'Seasonal', 'Surge']
     failure = ['Low', 'Medium', 'High']
+
     rows = []
     cond_id = 0
     for pol in policies:
@@ -65,23 +63,26 @@ def write_default_csvs():
                 for fail in failure:
                     rows.append([cond_id, pol, var, dem, fail])
                     cond_id += 1
+
     df_cond = pd.DataFrame(rows, columns=['condition_id', 'policy', 'variability', 'demand', 'failure'])
     df_cond.to_csv(os.path.join(data_folder, 'experiment_conditions_full.csv'), index=False)
 
 write_default_csvs()
+print("CSV files generated.")
 
-# ------------------------------------------------------------------------------
+# =============================================================================
 # 2. Load input data
-# ------------------------------------------------------------------------------
+# =============================================================================
 stages_df = pd.read_csv(os.path.join(data_folder, 'stage_config_base.csv'))
 product_mix_df = pd.read_csv(os.path.join(data_folder, 'product_mix.csv'))
 global_df = pd.read_csv(os.path.join(data_folder, 'global_params.csv'))
 var_df = pd.read_csv(os.path.join(data_folder, 'variability_parameters.csv'))
 fail_df = pd.read_csv(os.path.join(data_folder, 'failure_parameters.csv'))
 
-# Parse demand patterns (handle commas in parameters column)
+# Parse demand patterns
 with open(os.path.join(data_folder, 'demand_patterns.csv'), 'r') as f:
     lines = f.readlines()
+
 header = lines[0].strip().split(',')
 data = []
 for line in lines[1:]:
@@ -91,8 +92,8 @@ for line in lines[1:]:
     description = parts[2]
     parameters = ','.join(parts[3:])
     data.append([demand, typ, description, parameters])
-demand_df = pd.DataFrame(data, columns=header)
 
+demand_df = pd.DataFrame(data, columns=header)
 conditions_df = pd.read_csv(os.path.join(data_folder, 'experiment_conditions_full.csv'))
 
 product_types = product_mix_df['product_type'].tolist()
@@ -104,9 +105,9 @@ var_dict = var_df.set_index('variability').to_dict('index')
 fail_dict = fail_df.set_index('failure').to_dict('index')
 demand_dict = demand_df.set_index('demand').to_dict('index')
 
-# ------------------------------------------------------------------------------
-# 3. Simulation classes (Job, Machine, OSATSimulation)
-# ------------------------------------------------------------------------------
+# =============================================================================
+# 3. Simulation classes
+# =============================================================================
 class Job:
     def __init__(self, job_id, product_type, arrival_time, due_date, quantity=100):
         self.job_id = job_id
@@ -255,21 +256,24 @@ class OSATSimulation:
             )
             self.queues[0].append(job)
 
-# ------------------------------------------------------------------------------
-# 4. Helper: generate job arrivals
-# ------------------------------------------------------------------------------
+# =============================================================================
+# 4. Job generation
+# =============================================================================
 def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hours,
                                 product_list, product_probs):
     pattern_type = demand_pattern['type']
+
     if pattern_type == 'constant':
         def arrival_rate(t):
             return arrival_rate_base
+
     elif pattern_type == 'sinusoidal':
         params = demand_pattern['parameters'].split(',')
         amplitude = float(params[0])
         period = float(params[1])
         def arrival_rate(t):
             return arrival_rate_base * (1 + amplitude * np.sin(2 * np.pi * t / period))
+
     elif pattern_type == 'step':
         params = demand_pattern['parameters'].split(',')
         factor = float(params[0])
@@ -280,23 +284,28 @@ def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hour
                 return arrival_rate_base * factor
             else:
                 return arrival_rate_base
+
     else:
         raise ValueError(f"Unknown demand pattern type: {pattern_type}")
 
     jobs = []
     t = 0.0
     job_id = 0
+
     while t < duration_hours:
         rate = arrival_rate(t)
         if rate <= 0:
             t += 1.0
             continue
+
         interarrival = np.random.exponential(1.0 / rate)
         t += interarrival
         if t >= duration_hours:
             break
+
         product_type = np.random.choice(product_list, p=product_probs)
         due_date = t + planned_lead_time
+
         jobs.append({
             'job_id': job_id,
             'arrival_time': t,
@@ -305,17 +314,19 @@ def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hour
             'quantity': 100
         })
         job_id += 1
+
     return jobs
 
-# ------------------------------------------------------------------------------
-# 5. Run heuristics (FIFO, SPT, EDD) for all 189 conditions, 10 replications
-# ------------------------------------------------------------------------------
+# =============================================================================
+# 5. Run all heuristic simulations
+# =============================================================================
 NUM_REPLICATIONS = 10
 heuristic_policies = ['FIFO', 'SPT', 'EDD']
 conditions_heuristic = conditions_df[conditions_df['policy'].isin(heuristic_policies)]
 all_results = []
 
 print("Running heuristic simulations...")
+
 for idx, row in conditions_heuristic.iterrows():
     print(f"  {idx+1}/{len(conditions_heuristic)}: {row['policy']} {row['variability']} {row['demand']} {row['failure']}")
 
@@ -369,11 +380,11 @@ for idx, row in conditions_heuristic.iterrows():
 
 heuristic_df = pd.DataFrame(all_results)
 heuristic_df.to_csv('heuristic_results.csv', index=False)
-print("\nHeuristic results saved to heuristic_results.csv")
+print("Heuristic results saved.")
 
-# ------------------------------------------------------------------------------
-# 6. ANOVA and plots
-# ------------------------------------------------------------------------------
+# =============================================================================
+# 6. ANOVA + Charts
+# =============================================================================
 print("\n--- ANOVA for Makespan ---")
 anova_data = heuristic_df[['policy', 'makespan_mean']].copy()
 model = ols('makespan_mean ~ C(policy)', data=anova_data).fit()
@@ -383,45 +394,24 @@ print(anova_table)
 tukey = pairwise_tukeyhsd(anova_data['makespan_mean'], anova_data['policy'], alpha=0.01)
 print(tukey)
 
-# Overall performance table
 overall = heuristic_df.groupby('policy').agg({
     'makespan_mean': 'mean',
     'flow_time_mean': 'mean',
     'throughput_mean': 'mean',
     'energy_mean': 'mean'
 }).round(2)
+
 print("\nOverall performance:")
 print(overall)
 
-# Bar charts
+# Save charts
 fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 metrics = ['makespan_mean', 'flow_time_mean', 'throughput_mean', 'energy_mean']
 titles = ['Makespan (hours)', 'Flow Time (hours)', 'Throughput (jobs/hr)', 'Energy Efficiency (kWh/unit)']
+
 for i, ax in enumerate(axes.flat):
     values = overall[metrics[i]].values
-    ax.bar(overall.index, values, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+    ax.bar(overall.index, values)
     ax.set_title(titles[i])
     ax.set_ylabel(titles[i])
-    for j, v in enumerate(values):
-        ax.text(j, v + 0.05*max(values), f"{v:.2f}", ha='center')
-plt.tight_layout()
-plt.savefig('heuristic_charts.png')
-plt.show()
-
-by_var = heuristic_df.groupby(['policy', 'variability']).agg({'makespan_mean': 'mean'}).unstack()
-by_var.plot(kind='bar', figsize=(8,5))
-plt.title('Makespan by Variability')
-plt.ylabel('Makespan (hours)')
-plt.legend(title='Policy')
-plt.tight_layout()
-plt.savefig('makespan_by_variability.png')
-plt.show()
-
-# ------------------------------------------------------------------------------
-# 7. RL Demo (simplified for illustration)
-# ------------------------------------------------------------------------------
-print("\n--- RL Demo ---")
-# A full RL training loop would go here. For brevity, we simulate the learning curve.
-# In practice, you would train a PPO agent as in the earlier full code.
-# The results show the agent converges to selecting SPT (action=1).
-print("RL demo completed. Agent selects SPT.")
+    for
