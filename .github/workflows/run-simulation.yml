@@ -23,4 +23,4 @@ jobs:
         pip install simpy numpy pandas matplotlib seaborn statsmodels "ray[rllib]" gymnasium
 
     - name: Run simulation
-      run: python run_simulation.py
+      run: python -u run_simulation.py
