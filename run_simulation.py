@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""
+OSAT Thesis – Full Simulation (Heuristics + RL Demo)
+Run with: python osat_simulation.py
+"""
+
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,55 +13,46 @@ import gymnasium as gym
 from gymnasium import spaces
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.env import MultiAgentEnv
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import os
 import warnings
 warnings.filterwarnings('ignore')
 
-print("Packages imported successfully.")
-
-# =============================================================================
-# 1. Create input CSV files
-# =============================================================================
+# ------------------------------------------------------------
+# 1. Ensure input data exists (create default CSV files if missing)
+# ------------------------------------------------------------
 data_folder = 'input_data'
 if not os.path.exists(data_folder):
     os.makedirs(data_folder)
 
+# Create CSV files (only if they don't exist)
 def write_default_csvs():
     with open(os.path.join(data_folder, 'stage_config_base.csv'), 'w') as f:
         f.write("stage_id,name,num_machines,base_time_min,cv,mtbf_hours,mttr_hours\n")
         f.write("0,DieAttach,3,3.5,0.2,480,4\n1,WireBond,4,4.2,0.25,360,5\n")
         f.write("2,Encapsulation,3,6.8,0.22,600,6\n3,FinalTest,5,2.1,0.3,500,3\n")
         f.write("4,Quality,2,0.8,0.15,1000,2\n")
-
     with open(os.path.join(data_folder, 'product_mix.csv'), 'w') as f:
         f.write("product_type,probability\nA,0.5\nB,0.3\nC,0.2\n")
-
     with open(os.path.join(data_folder, 'global_params.csv'), 'w') as f:
         f.write("param,value\nplanned_lead_time_hours,168\nsimulation_duration_hours,168\n")
-
     with open(os.path.join(data_folder, 'variability_parameters.csv'), 'w') as f:
         f.write("variability,cv_multiplier,mtbf_multiplier,arrival_rate_multiplier\n")
         f.write("Low,0.5,1.5,1.0\nMedium,1.0,1.0,1.0\nHigh,1.5,0.67,1.0\n")
-
     with open(os.path.join(data_folder, 'failure_parameters.csv'), 'w') as f:
         f.write("failure,mtbf_multiplier\nLow,1.5\nMedium,1.0\nHigh,0.67\n")
-
     with open(os.path.join(data_folder, 'demand_patterns.csv'), 'w') as f:
         f.write("demand,type,description,parameters\n")
         f.write("Steady,constant,Constant arrival rate,1.0\n")
         f.write("Seasonal,sinusoidal,Weekly cycle (amplitude 0.3),0.3,168\n")
         f.write("Surge,step,2-day surge (factor 1.5),1.5,72,120\n")
-
-    # Full 189 conditions
-    policies = ['FIFO', 'SPT', 'EDD']
+    # Full condition list (7 policies × 27 combos = 189)
+    policies = ['FIFO', 'SPT', 'EDD', 'H-MARL-CTDE', 'H-MARL-Independent',
+                'H-MARL-ValueDecomp', 'Flat MARL']
     variability = ['Low', 'Medium', 'High']
     demand = ['Steady', 'Seasonal', 'Surge']
     failure = ['Low', 'Medium', 'High']
-
     rows = []
     cond_id = 0
     for pol in policies:
@@ -63,26 +61,26 @@ def write_default_csvs():
                 for fail in failure:
                     rows.append([cond_id, pol, var, dem, fail])
                     cond_id += 1
-
     df_cond = pd.DataFrame(rows, columns=['condition_id', 'policy', 'variability', 'demand', 'failure'])
     df_cond.to_csv(os.path.join(data_folder, 'experiment_conditions_full.csv'), index=False)
 
-write_default_csvs()
-print("CSV files generated.")
+# Check if any file missing; if so, create all
+if not all(os.path.exists(os.path.join(data_folder, f)) for f in ['stage_config_base.csv', 'product_mix.csv', 'global_params.csv', 'variability_parameters.csv', 'failure_parameters.csv', 'demand_patterns.csv', 'experiment_conditions_full.csv']):
+    write_default_csvs()
+    print("Default input CSV files created in input_data/")
 
-# =============================================================================
+# ------------------------------------------------------------
 # 2. Load input data
-# =============================================================================
+# ------------------------------------------------------------
 stages_df = pd.read_csv(os.path.join(data_folder, 'stage_config_base.csv'))
 product_mix_df = pd.read_csv(os.path.join(data_folder, 'product_mix.csv'))
 global_df = pd.read_csv(os.path.join(data_folder, 'global_params.csv'))
 var_df = pd.read_csv(os.path.join(data_folder, 'variability_parameters.csv'))
 fail_df = pd.read_csv(os.path.join(data_folder, 'failure_parameters.csv'))
 
-# Parse demand patterns
+# Demand patterns (handle commas in parameters column)
 with open(os.path.join(data_folder, 'demand_patterns.csv'), 'r') as f:
     lines = f.readlines()
-
 header = lines[0].strip().split(',')
 data = []
 for line in lines[1:]:
@@ -92,8 +90,8 @@ for line in lines[1:]:
     description = parts[2]
     parameters = ','.join(parts[3:])
     data.append([demand, typ, description, parameters])
-
 demand_df = pd.DataFrame(data, columns=header)
+
 conditions_df = pd.read_csv(os.path.join(data_folder, 'experiment_conditions_full.csv'))
 
 product_types = product_mix_df['product_type'].tolist()
@@ -105,9 +103,9 @@ var_dict = var_df.set_index('variability').to_dict('index')
 fail_dict = fail_df.set_index('failure').to_dict('index')
 demand_dict = demand_df.set_index('demand').to_dict('index')
 
-# =============================================================================
-# 3. Simulation classes
-# =============================================================================
+# ------------------------------------------------------------
+# 3. Simulation classes (Job, Machine, OSATSimulation)
+# ------------------------------------------------------------
 class Job:
     def __init__(self, job_id, product_type, arrival_time, due_date, quantity=100):
         self.job_id = job_id
@@ -256,24 +254,21 @@ class OSATSimulation:
             )
             self.queues[0].append(job)
 
-# =============================================================================
-# 4. Job generation
-# =============================================================================
+# ------------------------------------------------------------
+# 4. Helper to generate job arrivals
+# ------------------------------------------------------------
 def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hours,
-                                product_list, product_probs):
+                                product_list, product_probs, planned_lead_time):
     pattern_type = demand_pattern['type']
-
     if pattern_type == 'constant':
         def arrival_rate(t):
             return arrival_rate_base
-
     elif pattern_type == 'sinusoidal':
         params = demand_pattern['parameters'].split(',')
         amplitude = float(params[0])
         period = float(params[1])
         def arrival_rate(t):
             return arrival_rate_base * (1 + amplitude * np.sin(2 * np.pi * t / period))
-
     elif pattern_type == 'step':
         params = demand_pattern['parameters'].split(',')
         factor = float(params[0])
@@ -284,28 +279,23 @@ def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hour
                 return arrival_rate_base * factor
             else:
                 return arrival_rate_base
-
     else:
         raise ValueError(f"Unknown demand pattern type: {pattern_type}")
 
     jobs = []
     t = 0.0
     job_id = 0
-
     while t < duration_hours:
         rate = arrival_rate(t)
         if rate <= 0:
             t += 1.0
             continue
-
         interarrival = np.random.exponential(1.0 / rate)
         t += interarrival
         if t >= duration_hours:
             break
-
         product_type = np.random.choice(product_list, p=product_probs)
         due_date = t + planned_lead_time
-
         jobs.append({
             'job_id': job_id,
             'arrival_time': t,
@@ -314,19 +304,17 @@ def generate_jobs_for_condition(arrival_rate_base, demand_pattern, duration_hour
             'quantity': 100
         })
         job_id += 1
-
     return jobs
 
-# =============================================================================
-# 5. Run all heuristic simulations
-# =============================================================================
+# ------------------------------------------------------------
+# 5. Run heuristics (FIFO, SPT, EDD) for all 189 conditions, 10 replications
+# ------------------------------------------------------------
 NUM_REPLICATIONS = 10
 heuristic_policies = ['FIFO', 'SPT', 'EDD']
 conditions_heuristic = conditions_df[conditions_df['policy'].isin(heuristic_policies)]
 all_results = []
 
 print("Running heuristic simulations...")
-
 for idx, row in conditions_heuristic.iterrows():
     print(f"  {idx+1}/{len(conditions_heuristic)}: {row['policy']} {row['variability']} {row['demand']} {row['failure']}")
 
@@ -347,7 +335,8 @@ for idx, row in conditions_heuristic.iterrows():
         demand_pattern=demand_info,
         duration_hours=sim_duration,
         product_list=product_types,
-        product_probs=product_probs
+        product_probs=product_probs,
+        planned_lead_time=planned_lead_time
     )
 
     rep_metrics = []
@@ -380,11 +369,11 @@ for idx, row in conditions_heuristic.iterrows():
 
 heuristic_df = pd.DataFrame(all_results)
 heuristic_df.to_csv('heuristic_results.csv', index=False)
-print("Heuristic results saved.")
+print("\nHeuristic results saved to heuristic_results.csv")
 
-# =============================================================================
-# 6. ANOVA + Charts
-# =============================================================================
+# ------------------------------------------------------------
+# 6. ANOVA and plots
+# ------------------------------------------------------------
 print("\n--- ANOVA for Makespan ---")
 anova_data = heuristic_df[['policy', 'makespan_mean']].copy()
 model = ols('makespan_mean ~ C(policy)', data=anova_data).fit()
@@ -400,25 +389,133 @@ overall = heuristic_df.groupby('policy').agg({
     'throughput_mean': 'mean',
     'energy_mean': 'mean'
 }).round(2)
-
 print("\nOverall performance:")
 print(overall)
 
-# Save charts
+# Bar charts
 fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 metrics = ['makespan_mean', 'flow_time_mean', 'throughput_mean', 'energy_mean']
 titles = ['Makespan (hours)', 'Flow Time (hours)', 'Throughput (jobs/hr)', 'Energy Efficiency (kWh/unit)']
-
 for i, ax in enumerate(axes.flat):
     values = overall[metrics[i]].values
-    ax.bar(overall.index, values)
+    ax.bar(overall.index, values, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
     ax.set_title(titles[i])
     ax.set_ylabel(titles[i])
     for j, v in enumerate(values):
-        ax.text(j, v + 0.05 * max(values), f"{v:.2f}", ha='center')
-
+        ax.text(j, v + 0.05*max(values), f"{v:.2f}", ha='center')
 plt.tight_layout()
 plt.savefig('heuristic_charts.png')
-plt.close()
+plt.show()
 
-print("Simulation completed successfully.")
+by_var = heuristic_df.groupby(['policy', 'variability']).agg({'makespan_mean': 'mean'}).unstack()
+by_var.plot(kind='bar', figsize=(8,5))
+plt.title('Makespan by Variability')
+plt.ylabel('Makespan (hours)')
+plt.legend(title='Policy')
+plt.tight_layout()
+plt.savefig('makespan_by_variability.png')
+plt.show()
+
+# ------------------------------------------------------------
+# 7. RL Demo (PPO agent choosing dispatching rule)
+# ------------------------------------------------------------
+print("\n--- RL Demo ---")
+cond_row = conditions_heuristic.iloc[0]
+var_mult = var_dict[cond_row['variability']]
+fail_mult = fail_dict[cond_row['failure']]['mtbf_multiplier']
+demand_info = demand_dict[cond_row['demand']]
+base_arrival_rate = 0.5 * var_mult['arrival_rate_multiplier']
+stage_cfgs = []
+for _, s in stages_df.iterrows():
+    cfg = s.to_dict()
+    cfg['cv'] = s['cv'] * var_mult['cv_multiplier']
+    cfg['mtbf_hours'] = s['mtbf_hours'] * var_mult['mtbf_multiplier'] * fail_mult
+    stage_cfgs.append(cfg)
+
+class RuleEnv(gym.Env):
+    def __init__(self):
+        super().__init__()
+        self.action_space = spaces.Discrete(3)   # 0=FIFO,1=SPT,2=EDD
+        self.observation_space = spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32)
+        self.stage_cfgs = stage_cfgs
+        self.duration = sim_duration
+
+    def reset(self, seed=None, options=None):
+        self.jobs = generate_jobs_for_condition(
+            arrival_rate_base=base_arrival_rate,
+            demand_pattern=demand_info,
+            duration_hours=self.duration,
+            product_list=product_types,
+            product_probs=product_probs,
+            planned_lead_time=planned_lead_time
+        )
+        return np.array([0.0], dtype=np.float32), {}
+
+    def step(self, action):
+        rule = ['FIFO', 'SPT', 'EDD'][action]
+        sim = OSATSimulation(self.stage_cfgs, self.jobs, dispatching_rule=rule)
+        metrics = sim.run(self.duration)
+        throughput = metrics['throughput']
+        avg_flow = np.mean(metrics['flow_times']) if metrics['flow_times'] else 0
+        energy_per_unit = metrics['energy'] / metrics['total_units'] if metrics['total_units'] else 0
+        reward = throughput - 0.01 * avg_flow - 0.5 * energy_per_unit
+        return np.array([0.0], dtype=np.float32), reward, True, False, {}
+
+ray.init(ignore_reinit_error=True, include_dashboard=False)
+config = (
+    PPOConfig()
+    .environment(RuleEnv)
+    .env_runners(num_env_runners=1)
+    .training(train_batch_size=200, lr=1e-4, gamma=0.99, clip_param=0.2, entropy_coeff=0.01)
+    .resources(num_gpus=0)
+)
+algo = config.build()
+rewards = []
+for i in range(50):
+    result = algo.train()
+    rewards.append(result['episode_reward_mean'])
+    if i % 10 == 0:
+        print(f"Iteration {i}: reward = {result['episode_reward_mean']:.2f}")
+
+plt.figure(figsize=(8,5))
+plt.plot(rewards)
+plt.xlabel('Training Iteration')
+plt.ylabel('Mean Episode Reward')
+plt.title('RL Agent Learning Curve')
+plt.grid(True)
+plt.savefig('rl_learning_curve.png')
+plt.show()
+
+def evaluate_rule(rule, num_episodes=10):
+    m = []
+    for _ in range(num_episodes):
+        env = RuleEnv()
+        env.reset()
+        sim = OSATSimulation(env.stage_cfgs, env.jobs, dispatching_rule=rule)
+        metrics = sim.run(sim_duration)
+        m.append({
+            'makespan': metrics['makespan'],
+            'flow_time': np.mean(metrics['flow_times']) if metrics['flow_times'] else 0,
+            'throughput': metrics['throughput'],
+            'energy': metrics['energy'] / metrics['total_units'] if metrics['total_units'] else 0
+        })
+    return {k: np.mean([x[k] for x in m]) for k in m[0]}
+
+best_action = algo.compute_single_action(np.array([0.0], dtype=np.float32))
+best_rule = ['FIFO', 'SPT', 'EDD'][best_action]
+print(f"RL chooses rule: {best_rule}")
+rl_res = evaluate_rule(best_rule)
+fifo_res = evaluate_rule('FIFO')
+spt_res = evaluate_rule('SPT')
+edd_res = evaluate_rule('EDD')
+comp = pd.DataFrame({
+    'Policy': ['RL', 'FIFO', 'SPT', 'EDD'],
+    'Makespan (h)': [rl_res['makespan'], fifo_res['makespan'], spt_res['makespan'], edd_res['makespan']],
+    'Flow Time (h)': [rl_res['flow_time'], fifo_res['flow_time'], spt_res['flow_time'], edd_res['flow_time']],
+    'Throughput (jobs/h)': [rl_res['throughput'], fifo_res['throughput'], spt_res['throughput'], edd_res['throughput']],
+    'Energy (kWh/unit)': [rl_res['energy'], fifo_res['energy'], spt_res['energy'], edd_res['energy']]
+})
+print(comp)
+comp.to_csv('rl_comparison.csv', index=False)
+
+print("\nAll done. Results saved.")
