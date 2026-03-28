@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-OSAT Thesis – Chunked Simulation Runner
-Accepts command‑line arguments to run a subset of conditions.
-Usage:
-    python osat_simulation_chunked.py --start 0 --end 26 --replications 10
-    python osat_simulation_chunked.py --policy FIFO --variability Low --demand Steady --failure Low
+OSAT Thesis – Chunked Simulation Runner with Auto‑creation of input CSV files.
+If any of the required CSV files are missing, they are created with default
+parameters from the thesis.
 """
 
 import os
@@ -21,16 +19,92 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ------------------------------------------------------------
-# 1. Load input data (assumes input_data folder exists)
+# 0. Ensure input data exists (create default CSV files if missing)
+# ------------------------------------------------------------
+def ensure_input_files(data_folder='input_data'):
+    """Create all required input CSV files with default content if they don't exist."""
+    if not os.path.exists(data_folder):
+        os.makedirs(data_folder)
+
+    # Stage configuration
+    stage_path = os.path.join(data_folder, 'stage_config_base.csv')
+    if not os.path.exists(stage_path):
+        with open(stage_path, 'w') as f:
+            f.write("stage_id,name,num_machines,base_time_min,cv,mtbf_hours,mttr_hours\n")
+            f.write("0,DieAttach,3,3.5,0.2,480,4\n")
+            f.write("1,WireBond,4,4.2,0.25,360,5\n")
+            f.write("2,Encapsulation,3,6.8,0.22,600,6\n")
+            f.write("3,FinalTest,5,2.1,0.3,500,3\n")
+            f.write("4,Quality,2,0.8,0.15,1000,2\n")
+
+    # Product mix
+    prod_path = os.path.join(data_folder, 'product_mix.csv')
+    if not os.path.exists(prod_path):
+        with open(prod_path, 'w') as f:
+            f.write("product_type,probability\nA,0.5\nB,0.3\nC,0.2\n")
+
+    # Global parameters
+    glob_path = os.path.join(data_folder, 'global_params.csv')
+    if not os.path.exists(glob_path):
+        with open(glob_path, 'w') as f:
+            f.write("param,value\nplanned_lead_time_hours,168\nsimulation_duration_hours,168\n")
+
+    # Variability parameters
+    var_path = os.path.join(data_folder, 'variability_parameters.csv')
+    if not os.path.exists(var_path):
+        with open(var_path, 'w') as f:
+            f.write("variability,cv_multiplier,mtbf_multiplier,arrival_rate_multiplier\n")
+            f.write("Low,0.5,1.5,1.0\nMedium,1.0,1.0,1.0\nHigh,1.5,0.67,1.0\n")
+
+    # Failure parameters
+    fail_path = os.path.join(data_folder, 'failure_parameters.csv')
+    if not os.path.exists(fail_path):
+        with open(fail_path, 'w') as f:
+            f.write("failure,mtbf_multiplier\nLow,1.5\nMedium,1.0\nHigh,0.67\n")
+
+    # Demand patterns (note: parameters column may contain commas)
+    demand_path = os.path.join(data_folder, 'demand_patterns.csv')
+    if not os.path.exists(demand_path):
+        with open(demand_path, 'w') as f:
+            f.write("demand,type,description,parameters\n")
+            f.write("Steady,constant,Constant arrival rate,1.0\n")
+            f.write("Seasonal,sinusoidal,Weekly cycle (amplitude 0.3),0.3,168\n")
+            f.write("Surge,step,2-day surge (factor 1.5),1.5,72,120\n")
+
+    # Full condition list (7 policies × 27 combos = 189 rows)
+    cond_path = os.path.join(data_folder, 'experiment_conditions_full.csv')
+    if not os.path.exists(cond_path):
+        policies = ['FIFO', 'SPT', 'EDD', 'H-MARL-CTDE', 'H-MARL-Independent',
+                    'H-MARL-ValueDecomp', 'Flat MARL']
+        variability = ['Low', 'Medium', 'High']
+        demand = ['Steady', 'Seasonal', 'Surge']
+        failure = ['Low', 'Medium', 'High']
+        rows = []
+        cond_id = 0
+        for pol in policies:
+            for var in variability:
+                for dem in demand:
+                    for fail in failure:
+                        rows.append([cond_id, pol, var, dem, fail])
+                        cond_id += 1
+        df_cond = pd.DataFrame(rows, columns=['condition_id', 'policy', 'variability', 'demand', 'failure'])
+        df_cond.to_csv(cond_path, index=False)
+
+    print("All input CSV files are present (created if missing).")
+
+# ------------------------------------------------------------
+# 1. Load input data (will be created by ensure_input_files if missing)
 # ------------------------------------------------------------
 data_folder = 'input_data'
+ensure_input_files(data_folder)
+
 stages_df = pd.read_csv(os.path.join(data_folder, 'stage_config_base.csv'))
 product_mix_df = pd.read_csv(os.path.join(data_folder, 'product_mix.csv'))
 global_df = pd.read_csv(os.path.join(data_folder, 'global_params.csv'))
 var_df = pd.read_csv(os.path.join(data_folder, 'variability_parameters.csv'))
 fail_df = pd.read_csv(os.path.join(data_folder, 'failure_parameters.csv'))
 
-# Demand patterns (handle commas)
+# Demand patterns (handle commas in parameters column)
 with open(os.path.join(data_folder, 'demand_patterns.csv'), 'r') as f:
     lines = f.readlines()
 header = lines[0].strip().split(',')
@@ -56,7 +130,7 @@ fail_dict = fail_df.set_index('failure').to_dict('index')
 demand_dict = demand_df.set_index('demand').to_dict('index')
 
 # ------------------------------------------------------------
-# 2. Simulation classes (same as original)
+# 2. Simulation classes (identical to original)
 # ------------------------------------------------------------
 class Job:
     def __init__(self, job_id, product_type, arrival_time, due_date, quantity=100):
