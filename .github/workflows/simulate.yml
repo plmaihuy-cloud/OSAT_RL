@@ -3,13 +3,14 @@ name: OSAT Simulation Chunks
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # allows manual trigger
+  workflow_dispatch:   # allows manual run
 
 jobs:
   chunk:
     strategy:
       matrix:
-        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8]  # adjust number of chunks
+        # Split 189 conditions into 38 chunks of ~5 conditions each
+        chunk: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,8 +21,8 @@ jobs:
         run: pip install simpy numpy pandas matplotlib seaborn statsmodels ray[rllib] gymnasium
       - name: Run chunk
         run: |
-          start=$(( ${{ matrix.chunk }} * 21 ))
-          end=$(( start + 20 ))
+          start=$(( ${{ matrix.chunk }} * 5 ))
+          end=$(( start + 4 ))
           python osat_simulation_chunked.py --start $start --end $end --replications 10 --duration 168 --output chunk_${{ matrix.chunk }}.csv
       - uses: actions/upload-artifact@v4
         with:
