@@ -1,0 +1,8 @@
+simpy
+numpy
+pandas
+matplotlib
+seaborn
+statsmodels
+ray[rllib]
+gymnasium
