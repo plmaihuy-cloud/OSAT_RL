@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-OSAT Thesis – Chunked Simulation Runner with Auto‑creation of input CSV files.
-If any of the required CSV files are missing, they are created with default
-parameters from the thesis.
+OSAT Thesis – Chunked Simulation Runner (Auto‑creates input CSV files)
+Usage examples:
+    python osat_simulation_chunked.py --start 0 --end 26 --replications 10 --duration 168 --output chunk_0.csv
+    python osat_simulation_chunked.py --policy FIFO --replications 10
+    python osat_simulation_chunked.py --start 0 --end 5 --replications 1 --duration 1   # quick test
 """
 
 import os
@@ -10,12 +12,13 @@ import argparse
 import numpy as np
 import pandas as pd
 import simpy
+import warnings
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import warnings
+
 warnings.filterwarnings('ignore')
 
 # ------------------------------------------------------------
@@ -62,7 +65,7 @@ def ensure_input_files(data_folder='input_data'):
         with open(fail_path, 'w') as f:
             f.write("failure,mtbf_multiplier\nLow,1.5\nMedium,1.0\nHigh,0.67\n")
 
-    # Demand patterns (note: parameters column may contain commas)
+    # Demand patterns (parameters column may contain commas)
     demand_path = os.path.join(data_folder, 'demand_patterns.csv')
     if not os.path.exists(demand_path):
         with open(demand_path, 'w') as f:
@@ -93,7 +96,7 @@ def ensure_input_files(data_folder='input_data'):
     print("All input CSV files are present (created if missing).")
 
 # ------------------------------------------------------------
-# 1. Load input data (will be created by ensure_input_files if missing)
+# 1. Load input data (auto‑created if missing)
 # ------------------------------------------------------------
 data_folder = 'input_data'
 ensure_input_files(data_folder)
